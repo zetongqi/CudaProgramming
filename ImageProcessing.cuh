@@ -45,3 +45,15 @@ int ImageSubSample(
 	const int KernelSize,
 	cv::OutputArray & SubImg
 );
+
+__global__ void ImageSobel(
+	const uchar * ImgPtr,
+	const int ImgWidth,
+	const int ImgHeight,
+	uchar * SubImgPtr
+);
+
+int ImageSobel(
+	const cv::InputArray & Img,
+	cv::OutputArray & ImgSobel
+);

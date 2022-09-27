@@ -168,6 +168,10 @@ int ImageSubSample(
 	uchar * ImgCuda;
 	int Size = ImgMat.rows * ImgMat.cols * sizeof(uchar);
 	cudaMalloc((void **)&ImgCuda, Size);
+
+	std::clock_t c_start = std::clock();
+	auto t_start = std::chrono::high_resolution_clock::now();
+
 	cudaMemcpy(ImgCuda, ImgMat.data, Size, cudaMemcpyHostToDevice);
 
 	uchar * SubImgCuda;
@@ -186,9 +190,6 @@ int ImageSubSample(
 	int SubImgSize = SubImgWidth * SubImgHeight * sizeof(uchar);
 	cudaMalloc((void **)&SubImgCuda, SubImgSize);
 
-	std::clock_t c_start = std::clock();
-	auto t_start = std::chrono::high_resolution_clock::now();
-
 	int ThreadSize = 1024;
 	ImageSubSample << <(SubImgWidth * SubImgHeight) / ThreadSize + 1, ThreadSize >> > (
 		ImgCuda, 
@@ -200,6 +201,10 @@ int ImageSubSample(
 		SubImgCuda
 	);
 
+	SubImg.create(SubImgHeight, SubImgWidth, CV_8UC1);
+	cv::Mat SubImgMat = SubImg.getMat();
+	cudaMemcpy(SubImgMat.data, SubImgCuda, SubImgSize, cudaMemcpyDeviceToHost);
+
 	std::clock_t c_end = std::clock();
 	auto t_end = std::chrono::high_resolution_clock::now();
 	std::cout << std::fixed << std::setprecision(2) << "CPU time used: "
@@ -208,11 +213,106 @@ int ImageSubSample(
 		<< std::chrono::duration<double, std::milli>(t_end - t_start).count()
 		<< " ms\n";
 
-	SubImg.create(SubImgHeight, SubImgWidth, CV_8UC1);
-	cv::Mat SubImgMat = SubImg.getMat();
-	cudaMemcpy(SubImgMat.data, SubImgCuda, SubImgSize, cudaMemcpyDeviceToHost);
 	cudaFree(ImgCuda);
 	cudaFree(SubImgCuda);
+
+	return 0;
+}
+
+__global__ void ImageSobel(
+	const uchar * ImgPtr,
+	const int ImgWidth,
+	const int ImgHeight,
+	uchar * SubImgPtr
+)
+{
+	int index = threadIdx.x + blockIdx.x * blockDim.x;
+
+	//printf("%d %d %d \n", index, ImgWidth, ImgHeight);
+
+	if (index > ImgWidth * ImgHeight)
+	{
+		return;
+	}
+
+	int ColIdx = index % ImgWidth;
+	int RowIdx = index / ImgWidth;
+
+	float value = 0;
+	if ((ColIdx - 1 >= 0) && (ColIdx - 1 < ImgWidth) && (RowIdx - 1 >= 0) && (RowIdx - 1 < ImgHeight))
+	{
+		value += (-1 + (-1)) * ImgPtr[(RowIdx - 1) * ImgWidth + ColIdx - 1];
+	}
+	if ((RowIdx - 1 >= 0) && (RowIdx - 1 < ImgHeight))
+	{
+		value += -2 * ImgPtr[(RowIdx - 1) * ImgWidth + ColIdx];
+	}
+	if ((ColIdx + 1 >= 0) && (ColIdx + 1 < ImgWidth) && (RowIdx - 1 >= 0) && (RowIdx - 1 < ImgHeight))
+	{
+		value += (-1 + 1) * ImgPtr[(RowIdx - 1) * ImgWidth + ColIdx + 1];
+	}
+	if ((ColIdx - 1 >= 0) && (ColIdx - 1 < ImgHeight))
+	{
+		value += -2 * ImgPtr[RowIdx * ImgWidth + ColIdx - 1];
+	}
+	if ((ColIdx + 1 >= 0) && (ColIdx + 1 < ImgHeight))
+	{
+		value += 2 * ImgPtr[RowIdx * ImgWidth + ColIdx + 1];
+	}
+	if ((ColIdx - 1 >= 0) && (ColIdx - 1 < ImgWidth) && (RowIdx + 1 >= 0) && (RowIdx + 1 < ImgHeight))
+	{
+		value += (1 + (-1)) * ImgPtr[(RowIdx + 1) * ImgWidth + ColIdx - 1];
+	}
+	if ((RowIdx + 1 >= 0) && (RowIdx + 1 < ImgHeight))
+	{
+		value += 2 * ImgPtr[(RowIdx + 1) * ImgWidth + ColIdx];
+	}
+	if ((ColIdx + 1 >= 0) && (ColIdx + 1 < ImgWidth) && (RowIdx + 1 >= 0) && (RowIdx + 1 < ImgHeight))
+	{
+		value += (1 + 1) * ImgPtr[(RowIdx + 1) * ImgWidth + ColIdx + 1];
+	}
+
+	SubImgPtr[index] = abs(value);
+}
+
+int ImageSobel(
+	const cv::InputArray & Img,
+	cv::OutputArray & ImgSobel
+)
+{
+	cv::Mat ImgMat = Img.getMat();
+	ImgSobel.create(ImgMat.rows, ImgMat.cols, CV_8UC1);
+	cv::Mat ImgSobelMat = ImgSobel.getMat();
+	int InputImgSize = ImgMat.rows * ImgMat.cols * sizeof(uchar);
+	uchar * ImgCuda;
+	cudaMalloc((void **)&ImgCuda, InputImgSize);
+
+	std::clock_t c_start = std::clock();
+	auto t_start = std::chrono::high_resolution_clock::now();
+
+	cudaMemcpy(ImgCuda, ImgMat.data, InputImgSize, cudaMemcpyHostToDevice);
+	uchar * ImgSobelCuda;
+	int OutputImgSize = ImgMat.rows * ImgMat.cols * sizeof(uchar);
+	cudaMalloc((void **)&ImgSobelCuda, OutputImgSize);
+	int ThreadNum = 512;
+	ImageSobel << <(ImgMat.rows * ImgMat.cols) / ThreadNum + 1, ThreadNum >> > (
+		ImgCuda,
+		ImgMat.cols,
+		ImgMat.rows,
+		ImgSobelCuda
+		);
+	cudaMemcpy(ImgSobelMat.data, ImgSobelCuda, OutputImgSize, cudaMemcpyDeviceToHost);
+
+	std::clock_t c_end = std::clock();
+	auto t_end = std::chrono::high_resolution_clock::now();
+	std::cout << std::fixed << std::setprecision(2) << "CPU time used: "
+		<< 1000.0 * (c_end - c_start) / CLOCKS_PER_SEC << " ms\n"
+		<< "Wall clock time passed: "
+		<< std::chrono::duration<double, std::milli>(t_end - t_start).count()
+		<< " ms\n";
+
+	cudaFree(ImgCuda);
+	cudaFree(ImgSobelCuda);
 
 	return 0;
 }
